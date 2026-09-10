@@ -6,6 +6,10 @@ from src.analytics import (
     compute_meta_summary, 
     get_match_details
 )
+from src.data_loader import ensure_data_loaded
+
+# Ensure remote assets are present before rendering UI
+ensure_data_loaded()
 
 st.set_page_config(page_title="Showdown Analytics", layout="wide")
 
