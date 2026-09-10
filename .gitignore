@@ -1,0 +1,10 @@
+# Ignore local data directory
+data/
+
+# Ignore local DuckDB database files
+*.duckdb
+
+# Python cache files
+__pycache__/
+.venv/
+.DS_Store
