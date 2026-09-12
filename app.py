@@ -1,5 +1,6 @@
 import streamlit as st
 import polars as pl
+from src import data_loader
 from src.analytics import (
     get_tier_lazyframe, 
     compute_pokemon_stats, 
@@ -7,7 +8,9 @@ from src.analytics import (
     get_match_details,
     get_filtered_matches
 )
-from src.data_loader import ensure_format_data
+from src.data_loader import ensure_format_data, ensure_data_ledgers_and_parquets
+
+data_loader.ensure_data_ledgers_and_parquets()  # Ensure all datasets are available on startup
 
 st.set_page_config(page_title="Showdown Analytics", layout="wide")
 
