@@ -13,35 +13,40 @@ def ensure_format_data(format_tier: str):
 
     # 1. Download and extract dataset zip if missing
     if not format_dir.exists() or not any(format_dir.iterdir()):
-        print(f"Data for {format_tier} not found locally. Downloading from GitHub Release...")
+        print(f"[{format_tier}] Data not found locally. Downloading from GitHub Release...")
         
-        repo = "jonathanoliphant/showdown-project"  
+        repo = "jonnboi13/Showdown-project"
         tag = "v1.0.0"
         download_url = f"https://github.com/{repo}/releases/download/{tag}/{format_tier}_batches.zip"
         
         response = requests.get(download_url)
+        print(f"[{format_tier}] Zip download status code: {response.status_code}")
+        
         if response.status_code == 200:
+            format_dir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(io.BytesIO(response.content)) as z:
                 z.extractall(format_dir.parent)
-            print(f"Successfully downloaded and extracted {format_tier} batches!")
+            print(f"[{format_tier}] Successfully extracted batches!")
         else:
-            print(f"Failed to download {format_tier} dataset. Status code: {response.status_code}")
+            print(f"[{format_tier}] Failed to download dataset zip from: {download_url}")
 
     # 2. Download corresponding manifest file if missing
     if not manifest_file.exists():
-        print(f"Manifest for {format_tier} not found locally. Downloading from GitHub Release...")
+        print(f"[{format_tier}] Manifest not found locally. Downloading from GitHub Release...")
         
-        repo = "jonathanoliphant/showdown-project"
+        repo = "jonnboi13/Showdown-project"
         tag = "v1.0.0"
         manifest_url = f"https://github.com/{repo}/releases/download/{tag}/{format_tier}_manifest.json"
         
         m_response = requests.get(manifest_url)
+        print(f"[{format_tier}] Manifest download status code: {m_response.status_code}")
+        
         if m_response.status_code == 200:
             with open(manifest_file, "wb") as f:
                 f.write(m_response.content)
-            print(f"Successfully downloaded manifest for {format_tier}!")
+            print(f"[{format_tier}] Successfully downloaded manifest!")
         else:
-            print(f"Failed to download manifest. Status code: {m_response.status_code}")
+            print(f"[{format_tier}] Failed to download manifest from: {manifest_url}")
 
 def ensure_data_ledgers_and_parquets():
     for tier in ["gen9ou", "gen9uu", "gen9ubers"]:

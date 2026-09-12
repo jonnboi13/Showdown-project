@@ -1,5 +1,7 @@
 import streamlit as st
 import polars as pl
+import traceback
+from pathlib import Path
 from src import data_loader
 from src.analytics import (
     get_tier_lazyframe, 
@@ -32,11 +34,23 @@ with st.spinner(f"Ensuring dataset availability for {selected_label}..."):
 
 min_rating = st.sidebar.slider("Minimum Rating Filter", min_value=0, max_value=2000, value=1500, step=50)
 
-# Load data lazily based on tier
+# Load data lazily based on tier with diagnostic debugging
 try:
     lf = get_tier_lazyframe(tier)
-except FileNotFoundError:
-    st.error(f"No data manifest found for tier: {tier}")
+except Exception as e:
+    st.error(f"Failed to load tier {tier}: {e}")
+    st.text(traceback.format_exc())
+    
+    # Debug info: check what files actually exist on disk relative to app.py
+    base_dir = Path(__file__).parent
+    manifest_dir = base_dir / "data" / "manifests"
+    raw_dir = base_dir / "data" / "raw_batches" / tier
+    
+    st.write("Current Working Directory:", Path.cwd())
+    st.write("App Directory:", base_dir)
+    st.write("Manifest Directory Path:", manifest_dir)
+    st.write("Manifests found on disk:", [p.name for p in manifest_dir.glob("*")] if manifest_dir.exists() else "Directory does not exist")
+    st.write("Raw batches folder exists:", raw_dir.exists())
     st.stop()
 
 # 1. High-Level Meta Summary
@@ -61,7 +75,6 @@ df_stats = compute_pokemon_stats(lf, min_rating=min_rating)
 search_query = st.text_input("Filter Pokémon in table:", "", placeholder="Type a Pokémon name...")
 
 if search_query:
-    # Filter stats dataframe based on text input (case-insensitive)
     filtered_stats = df_stats.filter(
         pl.col("pokemon").str.to_lowercase().str.contains(search_query.lower())
     )
