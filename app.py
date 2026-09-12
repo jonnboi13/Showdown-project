@@ -7,16 +7,26 @@ from src.analytics import (
     get_match_details,
     get_filtered_matches
 )
-from src.data_loader import ensure_data_ledgers_and_parquets
-
-ensure_data_ledgers_and_parquets()
+from src.data_loader import ensure_format_data
 
 st.set_page_config(page_title="Showdown Analytics", layout="wide")
 
 st.title("Pokémon Showdown Meta Dashboard")
 
 # Sidebar controls
-tier = st.sidebar.selectbox("Select Format Tier", ["gen9ou", "gen9uu", "gen9ubers"])
+tier_options = {
+    "Gen 9 OU": "gen9ou",
+    "Gen 9 UU": "gen9uu",
+    "Gen 9 Ubers": "gen9ubers"
+}
+
+selected_label = st.sidebar.selectbox("Select Format Tier", list(tier_options.keys()))
+tier = tier_options[selected_label]
+
+# Ensure the format dataset is downloaded/extracted if missing (handles Streamlit Cloud & local boot)
+with st.spinner(f"Ensuring dataset availability for {selected_label}..."):
+    ensure_format_data(tier)
+
 min_rating = st.sidebar.slider("Minimum Rating Filter", min_value=0, max_value=2000, value=1500, step=50)
 
 # Load data lazily based on tier
@@ -163,7 +173,7 @@ if selected_pokemon and selected_pokemon != "None":
                     loser_rec = p2 if p1["won"] else p1
                     
                     m_col1, m_col2, m_col3 = st.columns(3)
-                    m_col1.metric("Format", winner_rec.get("format", "Gen 9 OU"))
+                    m_col1.metric("Format", winner_rec.get("format", selected_label))
                     m_col2.metric("Total Turns", winner_rec.get("turns", "N/A"))
                     m_col3.metric("Ladder Rating", f"{winner_rec.get('rating', 0):.0f}")
                     
@@ -230,7 +240,7 @@ else:
                 loser_rec = p2 if p1["won"] else p1
                 
                 m_col1, m_col2, m_col3 = st.columns(3)
-                m_col1.metric("Format", winner_rec.get("format", "Gen 9 OU"))
+                m_col1.metric("Format", winner_rec.get("format", selected_label))
                 m_col2.metric("Total Turns", winner_rec.get("turns", "N/A"))
                 m_col3.metric("Ladder Rating", f"{winner_rec.get('rating', 0):.0f}")
                 
