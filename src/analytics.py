@@ -68,20 +68,64 @@ def compute_pokemon_stats(lf: pl.LazyFrame, min_rating: int = 0) -> pl.DataFrame
     )
 
 
-def compute_meta_summary(lf: pl.LazyFrame) -> dict:
+def compute_meta_summary(lf: pl.LazyFrame, min_rating: int = 0) -> dict:
     """
-    Computes high-level global statistics for the tier overview dashboard.
+    Computes high-level global statistics for the tier overview dashboard,
+    respecting the minimum rating filter and handling empty sets safely.
     """
+    filtered_lf = lf.filter(pl.col("rating") >= min_rating)
+    total_records = filtered_lf.select(pl.len()).collect().item()
+    
+    if total_records == 0:
+        return {
+            "total_player_records": 0,
+            "avg_turns": 0.0,
+            "avg_rating": 0.0
+        }
+
     summary = (
-        lf.select([
-            pl.len().alias("total_player_records"),
-            pl.col("turns").mean().alias("avg_turns"),
-            pl.col("rating").mean().alias("avg_rating")
-        ])
-        .collect()
-        .row(0, named=True)
+        filtered_lf
+          .select([
+              pl.len().alias("total_player_records"),
+              pl.col("turns").mean().alias("avg_turns"),
+              pl.col("rating").mean().alias("avg_rating")
+          ])
+          .collect()
+          .row(0, named=True)
     )
     return summary
+
+
+def get_filtered_matches(lf: pl.LazyFrame, player_query: str = "", min_rating: int = 0, limit: int = 50) -> pl.DataFrame:
+    """
+    Returns a summarized DataFrame combining both players per match_id,
+    filtered by rating and optional player name, sorted by most recent upload time.
+    """
+    filtered = lf.filter(pl.col("rating") >= min_rating)
+    
+    if player_query:
+        # Find match_ids where either player matches the query
+        matching_ids = (
+            filtered.filter(pl.col("player").str.to_lowercase().str.contains(player_query.lower()))
+            .select("match_id")
+            .unique()
+        )
+        filtered = filtered.join(matching_ids, on="match_id", how="inner")
+
+    # Aggregate the two player rows per match_id into a single row with Player 1 vs Player 2
+    return (
+        filtered.group_by(["match_id", "uploadtime"])
+        .agg([
+            pl.col("player").sort_by("won", descending=True).first().alias("winner"),
+            pl.col("player").sort_by("won", descending=False).first().alias("loser"),
+            pl.col("rating").mean().alias("avg_rating"),
+            pl.col("turns").first().alias("turns")
+        ])
+        .sort("uploadtime", descending=True)
+        .limit(limit)
+        .collect()
+    )
+
 
 def get_match_details(format_tier: str, match_id: str) -> list[dict]:
     """

@@ -17,7 +17,6 @@ def load_manifest(format_tier: str) -> dict:
     if manifest_path.exists():
         with open(manifest_path, "r") as f:
             return json.load(f)
-    # Updated structure using file_mappings dictionary
     return {
         "total_matches": 0,
         "oldest_timestamp": None,
@@ -59,65 +58,120 @@ def run_ingestion(format_tier: str, backfill: bool = False, pages: int = 1):
     
     print(f"Loaded manifest: {len(file_mappings)} matches tracked. Oldest watermarked timestamp: {manifest['oldest_timestamp']}")
 
-    total_iterations = pages if backfill else 1
+    if backfill:
+        print(f"\n--- Starting Backfill Mode (Max pages: {pages}) ---")
+        for page in range(pages):
+            before_timestamp = manifest["oldest_timestamp"]
+            print(f"Backfill page {page + 1} of {pages} using watermark timestamp: {before_timestamp}")
 
-    for page in range(total_iterations):
-        if backfill:
-            print(f"\n--- Backfill Page {page + 1} of {total_iterations} for {format_tier} ---")
+            match_ids, oldest_in_batch = fetch_match_ids(format_tier, before=before_timestamp)
 
-        before_timestamp = manifest["oldest_timestamp"] if backfill else None
-        print(f"Backfilling using watermark timestamp: {before_timestamp}")
+            if not match_ids:
+                print("No more matches found from the API. Stopping backfill.")
+                break
 
-        match_ids, _ = fetch_match_ids(format_tier, before=before_timestamp)
+            parsed_dfs = []
+            new_batch_ids = []
 
-        if not match_ids:
-            print("No more matches found from the API. Stopping.")
-            break
+            for match_id in match_ids:
+                if match_id in file_mappings:
+                    continue
 
-        parsed_dfs = []
-        new_batch_ids = []
+                try:
+                    df = parse_match(match_id)
+                    parsed_dfs.append(df)
+                    new_batch_ids.append(match_id)
+                except Exception as e:
+                    print(f"Error parsing match {match_id}: {e}")
+                time.sleep(0.2)
 
-        for match_id in match_ids:
-            # Check against the dictionary keys for O(1) duplicate lookup
-            if match_id in file_mappings:
-                continue
-
-            try:
-                df = parse_match(match_id)
-                parsed_dfs.append(df)
-                new_batch_ids.append(match_id)
-            except Exception as e:
-                print(f"Error parsing match {match_id}: {e}")
-            time.sleep(0.2)
-
-        if parsed_dfs:
-            timestamp = int(time.time())
-            file_name = f"{format_tier}_batch_{timestamp}.parquet"
-            file_path = path / file_name
-            
-            combined_df = pl.concat(parsed_dfs)
-            combined_df.write_parquet(file_path)
-            
-            batch_min_time = combined_df.select(pl.col("uploadtime").min()).item()
-            
-            # Map every new match ID directly to this specific filename
-            for match_id in new_batch_ids:
-                file_mappings[match_id] = file_name
+            if parsed_dfs:
+                timestamp = int(time.time())
+                file_name = f"{format_tier}_batch_{timestamp}.parquet"
+                file_path = path / file_name
                 
-            manifest["total_matches"] = len(file_mappings)
-            
-            if manifest["oldest_timestamp"] is None or batch_min_time < manifest["oldest_timestamp"]:
-                manifest["oldest_timestamp"] = int(batch_min_time)
+                combined_df = pl.concat(parsed_dfs)
+                combined_df.write_parquet(file_path)
                 
-            save_manifest(format_tier, manifest)
-            
-            print(f"Successfully saved {len(parsed_dfs)} new matches to {file_path}")
-        else:
-            print("No new unique matches were parsed in this batch.")
+                batch_min_time = combined_df.select(pl.col("uploadtime").min()).item()
+                
+                for match_id in new_batch_ids:
+                    file_mappings[match_id] = file_name
+                    
+                manifest["total_matches"] = len(file_mappings)
+                
+                if manifest["oldest_timestamp"] is None or batch_min_time < manifest["oldest_timestamp"]:
+                    manifest["oldest_timestamp"] = int(batch_min_time)
+                    
+                save_manifest(format_tier, manifest)
+                print(f"Successfully saved {len(parsed_dfs)} new matches to {file_path}")
+            else:
+                print("No new unique matches were parsed in this batch.")
 
-        if backfill and page < total_iterations - 1:
+            if page < pages - 1:
+                time.sleep(1)
+    else:
+        print(f"\n--- Starting Dynamic Catch-Up Mode ---")
+        before_timestamp = None
+        max_safety_pages = 100
+        page = 0
+
+        while page < max_safety_pages:
+            page += 1
+            print(f"Fetching recent batch page {page}...")
+            match_ids, oldest_in_batch = fetch_match_ids(format_tier, before=before_timestamp)
+
+            if not match_ids:
+                print("No more matches returned from API. Catch-up complete.")
+                break
+
+            # Filter for IDs we haven't stored yet
+            new_match_ids = [mid for mid in match_ids if mid not in file_mappings]
+
+            if not new_match_ids:
+                print("Reached fully known matches. Catch-up gap successfully closed!")
+                break
+
+            parsed_dfs = []
+            saved_batch_ids = []
+
+            for match_id in new_match_ids:
+                try:
+                    df = parse_match(match_id)
+                    parsed_dfs.append(df)
+                    saved_batch_ids.append(match_id)
+                except Exception as e:
+                    print(f"Error parsing match {match_id}: {e}")
+                time.sleep(0.2)
+
+            if parsed_dfs:
+                timestamp = int(time.time())
+                file_name = f"{format_tier}_batch_{timestamp}.parquet"
+                file_path = path / file_name
+                
+                combined_df = pl.concat(parsed_dfs)
+                combined_df.write_parquet(file_path)
+                
+                batch_min_time = combined_df.select(pl.col("uploadtime").min()).item()
+                
+                for match_id in saved_batch_ids:
+                    file_mappings[match_id] = file_name
+                    
+                manifest["total_matches"] = len(file_mappings)
+                
+                if manifest["oldest_timestamp"] is None or batch_min_time < manifest["oldest_timestamp"]:
+                    manifest["oldest_timestamp"] = int(batch_min_time)
+                    
+                save_manifest(format_tier, manifest)
+                print(f"Successfully saved {len(parsed_dfs)} new matches to {file_path}")
+
+            if len(new_match_ids) < len(match_ids):
+                print("Overlap detected with existing database. Catch-up complete.")
+                break
+
+            before_timestamp = oldest_in_batch
             time.sleep(1)
 
 
 if __name__ == "__main__":
-    run_ingestion("gen9ou", backfill=True, pages=2)
+    run_ingestion("gen9ubers", backfill=False)
