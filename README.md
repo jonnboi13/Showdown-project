@@ -1,5 +1,7 @@
 # Pokémon Showdown Meta Dashboard
 
+[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://showdown-projectgit-mbetkr9fi9vhup2xqbggbq.streamlit.app)
+
 A high-performance analytics platform and web application for exploring competitive Pokémon Showdown metagame trends, battle statistics, and individual match replays. Built to process massive scale battle log data using efficient query engines and a serverless deployment architecture.
 
 ## Architecture & Design
@@ -19,6 +21,14 @@ The project includes an automated ingestion module (`ingest.py`) designed to int
 - **Backfill Mode:** Utilizes watermark-based timestamp pagination (`&before=`) to step backward through historical match logs for deep dataset expansion.
 - **Parquet Sharding & State Tracking:** Automatically parses raw battle logs into structured DataFrames, concatenates them into compressed `.parquet` batches, and updates a tracking JSON ledger (`_manifest.json`) mapping individual match IDs to their corresponding batch files.
 
+<!-- ## Automated Orchestration & CI/CD
+
+To ensure zero-touch, continuous metagame updates, the repository utilizes **GitHub Actions** (`.github/workflows/daily-ingest.yml`) to orchestrate daily EtLT runs:
+
+- **Matrix Parallel Strategy:** Executes concurrent jobs across three competitive tiers (`gen9ou`, `gen9uu`, `gen9ubers`) using `fail-fast: false` to ensure isolated tier failures do not block the pipeline.
+- **Scheduled & Manual Triggers:** Automated via a cron schedule running daily at `0 0 * * *` (midnight UTC) with `workflow_dispatch` enabled for on-demand manual execution.
+- **Asset Sync & Clobbering:** Runners authenticate via `GH_TOKEN` to pull existing release archives and manifests, execute incremental updates via `src/ingest.py`, and clobber-update the release binaries on `v1.0.0`. -->
+
 ## Key Features
 
 - **Real-Time Meta Summary:** Instantly computes overall player record counts, average battle turn lengths, and ladder rating distributions across configurable rating thresholds.
@@ -31,6 +41,7 @@ The project includes an automated ingestion module (`ingest.py`) designed to int
 - **Data Processing & Analytics:** Polars
 - **Web Framework & UI:** Streamlit
 - **Data Ingestion & Packaging:** Requests, Zipfile, GitHub Releases API
+<!-- - **Orchestration & CI/CD:** GitHub Actions (Matrix Strategy, GitHub CLI `gh`) -->
 - **Version Control:** Git, Streamlit Cloud
 
 ## Local Installation & Setup
