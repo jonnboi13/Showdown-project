@@ -172,6 +172,10 @@ def run_ingestion(format_tier: str, backfill: bool = False, pages: int = 1):
             before_timestamp = oldest_in_batch
             time.sleep(1)
 
-
 if __name__ == "__main__":
-    run_ingestion("gen9ubers", backfill=False)
+  tiers = ["gen9ou", "gen9uu", "gen9ubers"]
+  for tier in tiers:
+    print(f"\n==========================================")
+    print(f"Running ingestion for tier: {tier}")
+    print(f"==========================================")
+    run_ingestion(tier, backfill=False)

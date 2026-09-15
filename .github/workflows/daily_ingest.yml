@@ -1,0 +1,79 @@
+name: Daily Data Ingestion & Release Sync
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs every day at 00:00 UTC
+  workflow_dispatch:      # Allows manual trigger anytime from the Actions tab
+
+permissions:
+  contents: write         # Required to update GitHub Release assets
+
+jobs:
+  ingest-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Create data directories
+        run: |
+          mkdir -p data/manifests
+          mkdir -p data/raw_batches/gen9ou
+          mkdir -p data/raw_batches/gen9uu
+          mkdir -p data/raw_batches/gen9ubers
+
+      - name: Download existing release data (if available)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for tier in gen9ou gen9uu gen9ubers; do
+            # Download existing zip if it exists on the release
+            gh release download v1.0.0 --pattern "${tier}_batches.zip" --dir "." || true
+            if [ -f "${tier}_batches.zip" ]; then
+              unzip -o "${tier}_batches.zip" -d "data/raw_batches/$tier"
+              rm "${tier}_batches.zip"
+            fi
+
+            # Download existing manifest if it exists on the release
+            gh release download v1.0.0 --pattern "${tier}_manifest.json" --dir "data/manifests/" || true
+          done
+
+      - name: Run data ingestion (Appends new batches & updates manifests)
+        run: |
+          python ingest.py
+
+      - name: Package format batches into zip archives
+        run: |
+          for tier in gen9ou gen9uu gen9ubers; do
+            if [ -d "data/raw_batches/$tier" ]; then
+              cd "data/raw_batches/$tier"
+              zip -r "../../../${tier}_batches.zip" .
+              cd ../../..
+            fi
+          done
+
+      - name: Update GitHub Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          files: |
+            gen9ou_batches.zip
+            gen9uu_batches.zip
+            gen9ubers_batches.zip
+            data/manifests/gen9ou_manifest.json
+            data/manifests/gen9uu_manifest.json
+            data/manifests/gen9ubers_manifest.json
+          body: "Automated daily data ingestion update."
