@@ -24,11 +24,28 @@ def ensure_format_data(format_tier: str):
   if response.status_code == 200:
     format_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-      z.extractall(format_dir.parent)
+      z.extractall(format_dir)  # <-- Fixed: extract directly into format_dir
     print(f"[{format_tier}] Successfully extracted batches!")
   else:
     print(
         f"[{format_tier}] Failed to download dataset zip from: {download_url}"
+    )
+
+  # 2. Download corresponding manifest file from GitHub Release every time
+  manifest_url = f"https://github.com/{repo}/releases/download/{tag}/{format_tier}_manifest.json"
+  m_response = requests.get(manifest_url)
+  print(
+      f"[{format_tier}] Manifest download status code:"
+      f" {m_response.status_code}"
+  )
+
+  if m_response.status_code == 200:
+    with open(manifest_file, "wb") as f:
+      f.write(m_response.content)
+    print(f"[{format_tier}] Successfully downloaded manifest!")
+  else:
+    print(
+        f"[{format_tier}] Failed to download manifest from: {manifest_url}"
     )
 
   # 2. Download corresponding manifest file from GitHub Release every time
