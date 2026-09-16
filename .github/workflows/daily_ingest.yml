@@ -53,7 +53,7 @@ jobs:
 
       - name: Run data ingestion (Appends new batches & updates manifests)
         run: |
-          python ingest.py
+          python src/ingest.py
 
       - name: Package format batches into zip archives
         run: |

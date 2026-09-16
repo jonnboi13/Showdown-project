@@ -253,7 +253,7 @@ with col_search1:
   player_filter = st.text_input("Search by Player Name:", "")
 with col_search2:
   match_min_rating = st.number_input(
-      "Minimum Match Rating:", min_value=0, max_value=2000, value=1500, step=50
+      "Minimum Match Rating:", min_value=0, max_value=2000, value=0, step=50
   )
 
 match_df = get_filtered_matches(
