@@ -1,0 +1,17 @@
+[project]
+name = "showdown-meta-lab"
+version = "2.1.0"
+description = "A versioned Pokémon Showdown replay pipeline and linked Streamlit analysis"
+requires-python = ">=3.11"
+dependencies = [
+  "polars==1.43.2",
+  "requests==2.34.2",
+  "streamlit==1.62.0",
+]
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

@@ -1,318 +1,188 @@
-from pathlib import Path
-import traceback
-import polars as pl
+"""Streamlit entry point for Pokémon Showdown Meta Lab."""
+
+from __future__ import annotations
+
 import streamlit as st
-from src import data_loader
-from src.analytics import (
-    compute_meta_summary,
-    compute_pokemon_stats,
-    get_filtered_matches,
-    get_match_details,
-    get_tier_lazyframe,
+
+from showdown_app.config import DEFAULT_MIN_RATING, DEFAULT_TIER, TIERS
+from showdown_app.data_source import DatasetSourceError
+from showdown_app.pages import (
+    render_battles,
+    render_first_ko_analysis,
+    render_methodology,
+    render_overview,
+    render_players,
+    render_pokemon_explorer,
 )
-from src.data_loader import ensure_format_data
-
-# Page configuration
-st.set_page_config(page_title="Showdown Analytics", layout="wide")
-
-st.title("Pokémon Showdown Meta Dashboard")
-
-# Sidebar controls
-tier_options = {"Gen 9 OU": "gen9ou", "Gen 9 UU": "gen9uu", "Gen 9 Ubers": "gen9ubers"}
-
-selected_label = st.sidebar.selectbox(
-    "Select Format Tier", list(tier_options.keys())
+from showdown_app.services import (
+    cached_pokemon_stats,
+    cached_summary,
+    load_remote_dataset,
 )
-tier = tier_options[selected_label]
+from showdown_app.ui import apply_theme, render_hero, render_source_badge
 
-# 1. Ensure format dataset downloads from GitHub Release ONCE per session
-sync_key = f"tier_synced_{tier}"
-if sync_key not in st.session_state:
-  with st.spinner(f"Ensuring dataset availability for {selected_label}..."):
-    ensure_format_data(tier)
-    st.session_state[sync_key] = True
 
-min_rating = st.sidebar.slider(
-    "Minimum Rating Filter", min_value=0, max_value=2000, value=1500, step=50
+PAGES = {
+    "overview": "Overview",
+    "first-ko": "First KO study",
+    "pokemon": "Pokémon",
+    "players": "Players",
+    "battles": "Battles",
+    "methodology": "About the data",
+}
+DETAIL_TO_PARENT = {"player": "players", "match": "battles"}
+
+
+st.set_page_config(
+    page_title="Pokémon Showdown Meta Lab",
+    page_icon="⚔️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
+apply_theme()
 
 
-# 2. Cache the Polars LazyFrame construction so it doesn't re-scan disk on every rerun
-@st.cache_resource(show_spinner=False)
-def load_cached_tier_lazyframe(format_tier: str) -> pl.LazyFrame:
-  return get_tier_lazyframe(format_tier)
+def query_value(name: str, default: str) -> str:
+    value = st.query_params.get(name, default)
+    return value[0] if isinstance(value, list) else value
 
 
-# Load data lazily based on tier with diagnostic debugging
-try:
-  lf = load_cached_tier_lazyframe(tier)
-except Exception as e:
-  st.error(f"Failed to load tier {tier}: {e}")
-  st.text(traceback.format_exc())
+def replace_query(page: str, tier: str, rating: int) -> None:
+    st.query_params.clear()
+    st.query_params.update(page=page, tier=tier, rating=str(rating))
+    st.rerun()
 
-  base_dir = Path(__file__).parent
-  manifest_dir = base_dir / "data" / "manifests"
-  raw_dir = base_dir / "data" / "raw_batches" / tier
 
-  st.write("Current Working Directory:", Path.cwd())
-  st.write("App Directory:", base_dir)
-  st.write("Manifest Directory Path:", manifest_dir)
-  st.write(
-      "Manifests found on disk:",
-      [p.name for p in manifest_dir.glob("*")]
-      if manifest_dir.exists()
-      else "Directory does not exist",
-  )
-  st.write("Raw batches folder exists:", raw_dir.exists())
-  st.stop()
-
-# 1. High-Level Meta Summary
-summary = compute_meta_summary(lf, min_rating=min_rating)
-
-if summary["total_player_records"] == 0:
-  st.warning("No matches found matching the selected minimum rating filter.")
-  st.stop()
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Total Player Records", f"{summary['total_player_records']:,}")
-col2.metric("Average Turns", f"{summary['avg_turns']:.1f}")
-col3.metric("Average Ladder Rating", f"{summary['avg_rating']:.1f}")
-
-st.divider()
-
-# 2. Main Pokémon Statistics Table
-st.subheader("Tier Usage & Win Rates")
-df_stats = compute_pokemon_stats(lf, min_rating=min_rating)
-
-search_query = st.text_input(
-    "Filter Pokémon in table:", "", placeholder="Type a Pokémon name..."
-)
-
-if search_query:
-  filtered_stats = df_stats.filter(
-      pl.col("pokemon").str.to_lowercase().str.contains(search_query.lower())
-  )
-else:
-  filtered_stats = df_stats
-
-st.dataframe(filtered_stats, use_container_width=True, hide_index=True)
-st.divider()
-
-# 3. Hidden Gems Finder
-st.subheader("💎 Hidden Gems Finder")
-st.markdown(
-    "Discover niche Pokémon with high win rates but low overall usage/pick"
-    " rates."
-)
-
-col_gem1, col_gem2, col_gem3 = st.columns(3)
-with col_gem1:
-  max_usage = st.slider(
-      "Max Usage Rate (%)", min_value=1.0, max_value=20.0, value=5.0, step=0.5
-  )
-with col_gem2:
-  min_win_rate = st.slider(
-      "Min Win Rate", min_value=0.5, max_value=0.9, value=0.55, step=0.01
-  )
-with col_gem3:
-  min_appearances = st.number_input(
-      "Min Appearances", min_value=1, max_value=50, value=5, step=1
-  )
-
-hidden_gems_df = df_stats.filter(
-    (pl.col("usage_rate_pct") <= max_usage)
-    & (pl.col("win_rate") >= min_win_rate)
-    & (pl.col("appearances") >= min_appearances)
-).sort("win_rate", descending=True)
-
-if hidden_gems_df.is_empty():
-  st.info(
-      "No Pokémon match these specific hidden gem criteria. Try relaxing the"
-      " filters."
-  )
-else:
-  st.dataframe(hidden_gems_df, use_container_width=True, hide_index=True)
-
-st.divider()
-
-# 4. Pokémon Match Lookup
-st.subheader("🔍 Pokémon Match Lookup")
-st.markdown("Select a specific Pokémon to inspect all recorded matches featuring it.")
-
-all_pokemon = (
-    lf.explode("pokemon")
-    .with_columns(
-        pl.col("pokemon")
-        .str.replace(r"(,\s+[MF]|\-\*)$", "")
-        .alias("pokemon")
-    )
-    .select("pokemon")
-    .unique()
-    .sort("pokemon")
-    .collect()
-    .get_column("pokemon")
-    .to_list()
-)
-
-selected_pokemon = st.selectbox(
-    "Choose a Pokémon:", all_pokemon if all_pokemon else ["None"]
-)
-
-if selected_pokemon and selected_pokemon != "None":
-  matching_match_ids = (
-      lf.with_columns(
-          pl.col("pokemon").list.eval(
-              pl.element().str.replace(r"(,\s+[MF]|\-\*)$", "")
-          )
-      )
-      .filter(pl.col("pokemon").list.contains(selected_pokemon))
-      .filter(pl.col("rating") >= min_rating)
-      .select("match_id")
-      .unique()
-  )
-
-  poke_matches_lf = lf.join(matching_match_ids, on="match_id", how="inner")
-
-  poke_match_df = (
-      poke_matches_lf.group_by(["match_id", "uploadtime"])
-      .agg([
-          pl.col("player").filter(pl.col("won") == True).first().alias("winner"),
-          pl.col("player").filter(pl.col("won") == False).first().alias("loser"),
-          pl.col("rating").mean().alias("avg_rating"),
-          pl.col("turns").first().alias("turns"),
-      ])
-      .sort("uploadtime", descending=True)
-      .limit(50)
-      .collect()
-  )
-
-  if poke_match_df.is_empty():
-    st.info(
-        f"No matches found featuring {selected_pokemon} at the current rating"
-        " threshold."
-    )
-  else:
-    st.markdown(
-        f"Showing recent matches featuring **{selected_pokemon}** (up to 50):"
-    )
-    selected_poke_row = st.dataframe(
-        poke_match_df,
-        use_container_width=True,
-        hide_index=True,
-        selection_mode="single-row",
-        on_select="rerun",
-        key="poke_match_selector",
-    )
-
-    poke_rows = selected_poke_row.get("selection", {}).get("rows", [])
-    if poke_rows:
-      r_idx = poke_rows[0]
-      chosen_poke_match_id = poke_match_df["match_id"][r_idx]
-      st.markdown(f"### ⚔️ Match Summary: `{chosen_poke_match_id}`")
-      replay_url = f"https://replay.pokemonshowdown.com/{chosen_poke_match_id}"
-      st.markdown(f"[🎥 Watch Full Replay on Pokémon Showdown]({replay_url})")
-
-      try:
-        match_records = get_match_details(tier, chosen_poke_match_id)
-        if len(match_records) == 2:
-          p1, p2 = match_records[0], match_records[1]
-          winner_rec = p1 if p1["won"] else p2
-          loser_rec = p2 if p1["won"] else p1
-
-          m_col1, m_col2, m_col3 = st.columns(3)
-          m_col1.metric("Format", winner_rec.get("format", selected_label))
-          m_col2.metric("Total Turns", winner_rec.get("turns", "N/A"))
-          m_col3.metric("Ladder Rating", f"{winner_rec.get('rating', 0):.0f}")
-
-          st.divider()
-
-          col_win, col_loss = st.columns(2)
-          with col_win:
-            st.success(f"🏆 **Winner:** {winner_rec['player']}")
-            st.markdown("**Team Roster:**")
-            for pkm in winner_rec.get("pokemon", []):
-              st.markdown(f"- {pkm}")
-
-          with col_loss:
-            st.error(f"❌ **Loser:** {loser_rec['player']}")
-            st.markdown("**Team Roster:**")
-            for pkm in loser_rec.get("pokemon", []):
-              st.markdown(f"- {pkm}")
-        else:
-          st.json(match_records)
-      except (KeyError, FileNotFoundError) as e:
-        st.warning(str(e))
-
-st.divider()
-
-# 5. General Match Inspector & Explorer
-st.subheader("Match Inspector & Game Browser")
-
-col_search1, col_search2 = st.columns(2)
-with col_search1:
-  player_filter = st.text_input("Search by Player Name:", "")
-with col_search2:
-  match_min_rating = st.number_input(
-      "Minimum Match Rating:", min_value=0, max_value=2000, value=0, step=50
-  )
-
-match_df = get_filtered_matches(
-    lf, player_query=player_filter, min_rating=match_min_rating
-)
-
-if match_df.is_empty():
-  st.info("No matches found matching your search criteria.")
-else:
-  st.markdown(
-      "Select a row below to inspect match details (sorted by most recent upload"
-      " time):"
-  )
-
-  selected_match_row = st.dataframe(
-      match_df,
-      use_container_width=True,
-      hide_index=True,
-      selection_mode="single-row",
-      on_select="rerun",
-  )
-
-  selected_rows = selected_match_row.get("selection", {}).get("rows", [])
-
-  if selected_rows:
-    row_idx = selected_rows[0]
-    chosen_match_id = match_df["match_id"][row_idx]
-
-    st.markdown(f"### ⚔️ Match Summary: `{chosen_match_id}`")
-    replay_url = f"https://replay.pokemonshowdown.com/{chosen_match_id}"
-    st.markdown(f"[🎥 Watch Full Replay on Pokémon Showdown]({replay_url})")
-
+def read_route() -> tuple[str, str, int]:
+    page = query_value("page", "overview")
+    if page not in {*PAGES, *DETAIL_TO_PARENT}:
+        page = "overview"
+    tier = query_value("tier", DEFAULT_TIER)
+    if tier not in TIERS:
+        tier = DEFAULT_TIER
     try:
-      match_records = get_match_details(tier, chosen_match_id)
-      if len(match_records) == 2:
-        p1, p2 = match_records[0], match_records[1]
-        winner_rec = p1 if p1["won"] else p2
-        loser_rec = p2 if p1["won"] else p1
+        rating = int(query_value("rating", str(DEFAULT_MIN_RATING)))
+    except ValueError:
+        rating = DEFAULT_MIN_RATING
+    return page, tier, max(0, min(2000, rating))
 
-        m_col1, m_col2, m_col3 = st.columns(3)
-        m_col1.metric("Format", winner_rec.get("format", selected_label))
-        m_col2.metric("Total Turns", winner_rec.get("turns", "N/A"))
-        m_col3.metric("Ladder Rating", f"{winner_rec.get('rating', 0):.0f}")
 
+def render_sidebar(page: str, tier: str, min_rating: int) -> None:
+    parent_page = DETAIL_TO_PARENT.get(page, page)
+    with st.sidebar:
+        st.markdown("## ⚔️ Meta Lab")
+        st.caption("A connected exploration of public competitive-battle data.")
         st.divider()
 
-        col_win, col_loss = st.columns(2)
-        with col_win:
-          st.success(f"🏆 **Winner:** {winner_rec['player']}")
-          st.markdown("**Team Roster:**")
-          for pkm in winner_rec.get("pokemon", []):
-            st.markdown(f"- {pkm}")
+        nav_labels = list(PAGES.values())
+        selected_label = st.radio(
+            "Explore",
+            nav_labels,
+            index=nav_labels.index(PAGES[parent_page]),
+        )
+        selected_page = next(
+            slug for slug, label in PAGES.items() if label == selected_label
+        )
+        if selected_page != parent_page:
+            replace_query(selected_page, tier, min_rating)
 
-        with col_loss:
-          st.error(f"❌ **Loser:** {loser_rec['player']}")
-          st.markdown("**Team Roster:**")
-          for pkm in loser_rec.get("pokemon", []):
-            st.markdown(f"- {pkm}")
-      else:
-        st.json(match_records)
-    except (KeyError, FileNotFoundError) as e:
-      st.warning(str(e))
+        st.divider()
+        tier_labels = [config.label for config in TIERS.values()]
+        selected_tier_label = st.selectbox(
+            "Format",
+            tier_labels,
+            index=tier_labels.index(TIERS[tier].label),
+        )
+        selected_tier = next(
+            slug
+            for slug, config in TIERS.items()
+            if config.label == selected_tier_label
+        )
+        if selected_tier != tier:
+            replace_query(parent_page, selected_tier, min_rating)
+
+        selected_rating = st.slider(
+            "Minimum ladder rating",
+            min_value=0,
+            max_value=2000,
+            value=min_rating,
+            step=50,
+            help="Higher values focus the analysis on more highly rated players.",
+        )
+        if selected_rating != min_rating:
+            replace_query(parent_page, tier, selected_rating)
+
+        st.divider()
+        if st.button("Refresh from GitHub", width="stretch"):
+            st.cache_resource.clear()
+            st.cache_data.clear()
+            st.rerun()
+        st.markdown(
+            '<p class="nav-note">GitHub Release assets are the source of truth. '
+            "The app validates them before using its temporary performance cache.</p>",
+            unsafe_allow_html=True,
+        )
+
+
+page, tier, min_rating = read_route()
+render_sidebar(page, tier, min_rating)
+
+try:
+    with st.spinner("Checking the current GitHub release and preparing the dataset…"):
+        dataset = load_remote_dataset(tier)
+except (DatasetSourceError, OSError, ValueError) as exc:
+    st.error("The current GitHub dataset could not be prepared.")
+    with st.expander("Technical detail"):
+        st.code(str(exc))
+    st.stop()
+except Exception as exc:
+    st.error("GitHub could not be reached or returned an unexpected response.")
+    with st.expander("Technical detail"):
+        st.code(str(exc))
+    st.stop()
+
+dataset_path = str(dataset.dataset_path)
+summary = cached_summary(dataset_path, min_rating)
+if not summary["total_matches"]:
+    st.warning("No battles match this rating threshold. Try lowering the filter.")
+    st.stop()
+stats = cached_pokemon_stats(dataset_path, min_rating)
+
+render_hero(TIERS[tier], min_rating, summary)
+metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+metric_1.metric("Battles analyzed", f"{summary['total_matches']:,}")
+metric_2.metric("Public accounts", f"{summary['unique_players']:,}")
+metric_3.metric("Average rating", f"{summary['avg_rating']:,.0f}")
+metric_4.metric("Median battle length", f"{summary['median_turns']:,.0f} turns")
+st.markdown(TIERS[tier].explanation)
+render_source_badge(dataset)
+st.divider()
+
+if page == "overview":
+    render_overview(dataset, tier, min_rating, summary, stats)
+elif page == "first-ko":
+    render_first_ko_analysis(dataset, tier, min_rating)
+elif page == "pokemon":
+    render_pokemon_explorer(
+        dataset,
+        tier,
+        min_rating,
+        stats,
+        requested_pokemon=query_value("pokemon", ""),
+    )
+elif page in {"players", "player"}:
+    render_players(
+        dataset,
+        tier,
+        min_rating,
+        requested_player=query_value("player", ""),
+    )
+elif page in {"battles", "match"}:
+    render_battles(
+        dataset,
+        tier,
+        min_rating,
+        requested_match=query_value("match", ""),
+    )
+elif page == "methodology":
+    render_methodology(dataset, tier, min_rating, summary)

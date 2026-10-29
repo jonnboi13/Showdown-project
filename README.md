@@ -1,77 +1,147 @@
-# Pokémon Showdown Meta Dashboard
+# Pokémon Showdown Meta Lab
 
-[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20App-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://showdown-projectgit-mbetkr9fi9vhup2xqbggbq.streamlit.app)
+[![Streamlit App](https://img.shields.io/badge/Streamlit-Live%20App-7F56D9?style=for-the-badge&logo=streamlit&logoColor=white)](https://showdown-projectgit-mbetkr9fi9vhup2xqbggbq.streamlit.app)
 
-A high-performance analytics platform and web application for exploring competitive Pokémon Showdown metagame trends, battle statistics, and individual match replays. Built to process massive scale battle log data using efficient query engines and a serverless deployment architecture.
+A senior data-science project that turns public Pokémon Showdown replays into a connected analysis of team selection, player results, metagame change, and individual battles.
 
-## Architecture & Design
+The dashboard is written for both competitive players and people who do not know Pokémon. Terms are defined in plain language, headline findings link to their underlying evidence, and uncertainty is shown beside observed win rates.
 
-To bypass standard Git repository size limitations without relying on complex external data warehouse services, this project implements a **GitHub Release Asset & Manifest Pipeline**:
+## The problem
 
-- **Distributed Sharding:** Raw battle logs are partitioned into compressed Apache Parquet batch files (`.parquet`) organized by competitive tiers (`gen9ou`, `gen9uu`, `gen9ubers`).
-- **Manifest Ledgering:** JSON manifest files track batch chunk metadata, row counts, and schema structures on-demand.
-- **On-Demand Hydration:** `data_loader.py` checks local runtime storage on application boot, automatically pulling missing format `.zip` archives and lookup ledgers directly from versioned GitHub Releases (`v1.0.0`) using streaming HTTP requests.
-- **Lazy Evaluation:** Powered by **Polars** lazyframes (`scan_parquet`), executing optimized relational query plans across large datasets with minimal memory overhead.
+Pokémon Showdown publishes individual replay logs, but a single replay does not reveal broader patterns. Answering questions such as “Which choices are common?”, “Which results are supported by enough data?”, or “How did usage change this week?” requires a repeatable ingestion pipeline, a consistent data model, and analysis that remains traceable to individual records.
 
-## Data Pipeline & Ingestion
+## What the project does
 
-The project includes an automated ingestion module (`ingest.py`) designed to interface directly with the Pokémon Showdown Replays API, maintaining an incremental data store without redundant processing:
+- Collects new public replays for three Generation 9 singles formats.
+- Parses each battle into two team-level records.
+- Captures first-KO timing and outcome fields while explicitly marking same-turn double KOs and no-KO finishes.
+- Stores compressed Parquet batches and a match-to-file manifest in GitHub Releases.
+- Validates release asset IDs and SHA-256 digests before analysis.
+- Consolidates remote batches into a temporary runtime cache for faster Polars queries.
+- Connects overview findings to Pokémon profiles, player profiles, battle details, and original replays.
+- Reports sample sizes and Wilson 95% intervals so small-sample results are visible.
 
-- **Incremental Catch-Up Mode:** Dynamically queries recent matches, cross-references existing storage using local state manifests, and stops as soon as it hits a known data boundary.
-- **Backfill Mode:** Utilizes watermark-based timestamp pagination (`&before=`) to step backward through historical match logs for deep dataset expansion.
-- **Parquet Sharding & State Tracking:** Automatically parses raw battle logs into structured DataFrames, concatenates them into compressed `.parquet` batches, and updates a tracking JSON ledger (`_manifest.json`) mapping individual match IDs to their corresponding batch files.
+## Verified data result
 
-<!-- ## Automated Orchestration & CI/CD
+On October 21, 2026, the GitHub Release manifests listed **88,067 battles**:
 
-To ensure zero-touch, continuous metagame updates, the repository utilizes **GitHub Actions** (`.github/workflows/daily-ingest.yml`) to orchestrate daily EtLT runs:
+- 73,311 Gen 9 OU battles
+- 6,614 Gen 9 UU battles
+- 8,142 Gen 9 Ubers battles
 
-- **Matrix Parallel Strategy:** Executes concurrent jobs across three competitive tiers (`gen9ou`, `gen9uu`, `gen9ubers`) using `fail-fast: false` to ensure isolated tier failures do not block the pipeline.
-- **Scheduled & Manual Triggers:** Automated via a cron schedule running daily at `0 0 * * *` (midnight UTC) with `workflow_dispatch` enabled for on-demand manual execution.
-- **Asset Sync & Clobbering:** Runners authenticate via `GH_TOKEN` to pull existing release archives and manifests, execute incremental updates via `src/ingest.py`, and clobber-update the release binaries on `v1.0.0`. -->
+A normal battle produces two team records, so this release represents about 176,000 player-team observations before rating filters. The validated archives contained 88,066 unique battles: the OU archive was one battle short of its manifest, an integrity gap the app discloses instead of hiding. The dashboard reads the current release metadata at runtime; these counts will grow as ingestion continues.
 
-## Key Features
+## Dashboard structure
 
-- **Real-Time Meta Summary:** Instantly computes overall player record counts, average battle turn lengths, and ladder rating distributions across configurable rating thresholds.
-- **Tier Usage & Win Rates:** Aggregates individual Pokémon pick rates, win percentages, and appearance volumes with live text-filtering.
-- **💎 Hidden Gems Finder:** Filters for niche Pokémon with high win rates and low overall usage rates using dynamic multi-variable sliders.
-- **Match Inspector & Game Browser:** Deep-dive into specific player histories, view complete winner/loser team rosters, and launch directly into official Pokémon Showdown replays.
+- **Overview:** computed findings, usage patterns, outcome uncertainty, recent usage change, rating distribution, and battle length.
+- **First KO study:** data readiness, the primary association estimate, uncertainty, subgroup comparisons, exclusions, and linked source battles.
+- **Pokémon:** a filterable comparison table and linked profiles with daily trends, common teammates, and source battles.
+- **Players:** activity and outcome comparisons with linked team choices and battle history.
+- **Battles:** searchable replay records with linked players, linked Pokémon, both rosters, and the original Showdown replay.
+- **About the data:** definitions, pipeline architecture, source status, and limitations.
 
-## Tech Stack
+## Data source design
 
-- **Data Processing & Analytics:** Polars
-- **Web Framework & UI:** Streamlit
-- **Data Ingestion & Packaging:** Requests, Zipfile, GitHub Releases API
-<!-- - **Orchestration & CI/CD:** GitHub Actions (Matrix Strategy, GitHub CLI `gh`) -->
-- **Version Control:** Git, Streamlit Cloud
+GitHub Releases are the dashboard's source of truth. The app does not read a repository-local `data/` directory.
 
-## Local Installation & Setup
+At runtime it:
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/jonnboi13/Showdown-project.git
-   cd Showdown-project
-   ```
+1. Requests metadata for release `v1.0.0`.
+2. Selects the current archive and manifest asset IDs for the chosen format.
+3. Reuses a temporary cache only when those IDs match the current release.
+4. Downloads changed assets and validates available SHA-256 digests.
+5. Compares manifest and Parquet match counts and reports any small discrepancy.
+6. Consolidates many small Parquet batches into one temporary file.
 
-2. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+This keeps the deployed app current without committing generated data to Git.
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Repository structure
 
-4. **Run Data Ingestion (Optional):**
-   If you want to pull fresh battle logs directly from the Pokémon Showdown API and build or expand your own local Parquet shards and manifests from scratch instead of downloading them from the GitHub Release assets:
-   ```bash
-   python src/ingest.py
-   ```
-   *(By default, this runs in dynamic catch-up mode. You can modify the target tier or toggle backfill parameters directly inside `ingest.py`)*.
+```text
+showdown_app/
+  analytics.py       metric definitions and Polars queries
+  charts.py          reusable interactive chart definitions
+  config.py          tiers, release location, and defaults
+  data_source.py     GitHub validation, downloads, and cache preparation
+  pages.py           linked dashboard page renderers
+  services.py        cached query and profile services
+  ui.py              shared Streamlit presentation components
+showdown_pipeline/
+  schema.py          versioned team-record data contract
+  parser.py          deterministic replay and first-KO parsing
+  ingestion.py       incremental collection and resumable enrichment
+scripts/
+  ingest.py          thin pipeline command-line entry point
+  parse_replay.py    compatibility imports for older callers
+  check_project.py   compilation, unit, and optional app checks
+tests/               parser and analytics tests
+docs/                architecture and data dictionary
+.github/workflows/   scheduled ingestion and release publishing
+app.py               Streamlit entry point and linked pages
+```
 
-5. **Run the Streamlit application:**
-   ```bash
-   streamlit run app.py
-   ```
-   *(Note: If local data isn't present, the application will automatically fetch and unpack the necessary tier datasets from the GitHub Release assets on initial boot).*
+## Run locally
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+streamlit run app.py
+```
+
+The first visit to each format downloads and validates its current release assets. Later runs reuse the matching temporary cache after checking GitHub release metadata.
+
+## Checks
+
+Run the fast deterministic checks:
+
+```bash
+python scripts/check_project.py
+```
+
+Include a full Streamlit smoke test against the current remote data:
+
+```bash
+python scripts/check_project.py --with-app
+```
+
+## Data pipeline
+
+Collect new replays using the current schema:
+
+```bash
+python -m scripts.ingest --mode incremental
+```
+
+Upgrade a limited number of existing batches with first-KO data:
+
+```bash
+python -m scripts.ingest \
+  --tier gen9ou \
+  --mode enrich \
+  --max-enrichment-batches 10
+```
+
+Enrichment is resumable and atomic. The manifest records each completed batch,
+and a legacy batch is replaced only when every mapped replay has been fetched,
+parsed, and validated. The GitHub Actions workflow exposes the same modes for
+manual runs. Its daily schedule collects new replays, while each push to `main`
+runs both incremental collection and up to ten historical enrichment batches per
+tier. The resulting Parquet archives and manifests are published as GitHub Release
+assets rather than committed to the branch.
+
+## Metric definitions
+
+- **Usage rate:** a Pokémon's appearances divided by filtered team records.
+- **Observed win rate:** wins divided by appearances in this replay sample.
+- **95% interval:** Wilson score interval for observed win rate.
+- **Usage change:** latest seven-day usage minus the preceding seven-day usage.
+- **First-KO win rate:** share of eligible matches won by the side whose opponent fainted first.
+
+See [the first-KO analysis plan](docs/FIRST_KO_ANALYSIS.md),
+[data dictionary](docs/DATA_DICTIONARY.md), and
+[architecture notes](docs/ARCHITECTURE.md) for details.
+
+## Limitations
+
+Public replays are not a random sample of every battle. Results are descriptive, not causal: player skill, teammates, matchups, and replay-selection behavior can influence both Pokémon selection and outcomes. Public account names also may not correspond one-to-one with people.
